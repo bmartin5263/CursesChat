@@ -21,11 +21,42 @@ def main():
     c = Client(serverAddress, debugger)
     c.run()
 
+class ChatRoom:
+
+    CHAT_PORT = 24601
+    FILE_PORT = 24602
+
+    def __init__(self, serverAddress):
+        self.username = ""
+        self.room = ""
+        self.users = []
+        self.serverAddress = serverAddress
+        self.messageManager = None
+        self.fileManager = None
+        self.connectedToRoom = False
+
+    def connectToRoom(self, roomname):
+        self.messageManager.connect(self.serverAddress)
+        self.connectedToRoom = True
+        #reader = threading.Thread(target=self.serverReader)
+        #writer = threading.Thread(target=self.serverWriter, args=(serverSock,))
+        #reader.start()
+        #writer.start()
+        #return reader, writer
+
+    def joinRoom(self):
+        self.startChatManagers()
+
+    def startChatManagers(self):
+        self.messageManager = SocketManager.actAsClient(port=Client.CHAT_PORT, debugger=self.debug)
+
+    def stopChatManagers(self):
+        self.messageManager.terminateManager()
+
+
 class Client:
 
     SERVER_PORT = 24600
-    CHAT_PORT = 24601
-    FILE_PORT = 24602
 
     def __init__(self, serverAddress, debugger=None):
         self.debug = debugger
@@ -41,9 +72,6 @@ class Client:
         self.chatRoom = None
 
         self.lock = threading.RLock()
-
-    def connectToRoom(self):
-        pass
 
     def connectToServer(self):
         serverSock = self.serverSocketManager.connect(self.serverAddress)
@@ -138,14 +166,6 @@ class Client:
 
         self.stopServerManager()
         self.console("Exiting client.", "important")
-
-    def startChatManagers(self):
-        self.serverSocketManager = SocketManager.actAsClient(port=Client.CHAT_PORT, debugger=self.debug)
-        self.console("Chat Manager Started.", "important")
-
-    def stopChatManagers(self):
-        self.serverSocketManager.terminateManager()
-        self.console("Chat Manager Terminated.", "important")
 
     def startServerManager(self):
         self.serverSocketManager = SocketManager.actAsClient(port=Client.SERVER_PORT, debugger=self.debug)

@@ -39,10 +39,17 @@ class Notification(Enum):
     CLIENT_DISCONNECTED = 1
 
 class Message(Enum):
+    # SERVER
     GET_ROOMS = "dict(type='room', action='get')"
-    SEND_ROOMS = "dict(type='room', action='get', data={})"
-    NEW_ROOM = "dict(type='room', action='new', data='{}')"
-    CHAT = "dict(type='chat', data='{}')"
+    SEND_ROOMS = "dict(type='room', action='get', data={data})"
+    NEW_ROOM = "dict(type='room', action='new', data='{data}')"
+    CHAT = "dict(type='chat', data='{data}')"
+    # CHAT ROOM
+    JOIN_ROOM = "dict(type='room', action=join, data={data})"
+
+    @staticmethod
+    def compile(message, **kwargs):
+        return message.value.format(**kwargs)
 
 class SocketManager:
     """Class for managing inputs/outputs of multiple sockets.
@@ -232,7 +239,7 @@ class SocketManager:
         """Receive Data From Socket"""
         while True:
             try:
-                message = TCPMessage.receive(sock)
+                message = FixedMessage.receive(sock)
                 self.addInbox(sock, message)
             except socket.timeout:
                 self.console('Receiver Timeout', 'connection')
@@ -255,7 +262,7 @@ class SocketManager:
             try:
                 out = self.getOutbox(sock)
                 for message in out:
-                    message = TCPMessage(data=message)
+                    message = FixedMessage(data=message)
                     message.sendTo(sock)
             except AssertionError:
                 self.console("Message incorrect size", 'important')
@@ -308,7 +315,7 @@ class SocketManager:
     def writeGroup(self, message, group, exclude=list()):
         self.modifyOutbox(False, message=message, group=group, exclude=exclude)
 
-class TCPMessage:
+class FixedMessage:
     """Class for facilitating communication between clients using fixed length messages."""
 
     MESSAGE_LENGTH = 1024
@@ -334,20 +341,20 @@ class TCPMessage:
         and reconstructed as such."""
         self.payload = []
         string = str(data).rstrip('\n')
-        pack, remaining = string[:TCPMessage.MESSAGE_LENGTH], string[TCPMessage.MESSAGE_LENGTH:]
+        pack, remaining = string[:FixedMessage.MESSAGE_LENGTH], string[FixedMessage.MESSAGE_LENGTH:]
         while len(remaining) > 0:
-            trailing = pack[TCPMessage.MESSAGE_LENGTH - 1]
-            pack = pack[:TCPMessage.MESSAGE_LENGTH - 1] + TCPMessage.DELIMITER
+            trailing = pack[FixedMessage.MESSAGE_LENGTH - 1]
+            pack = pack[:FixedMessage.MESSAGE_LENGTH - 1] + FixedMessage.DELIMITER
             self.payload.append(pack)
             remaining = trailing + remaining
-            pack, remaining = remaining[:TCPMessage.MESSAGE_LENGTH], remaining[TCPMessage.MESSAGE_LENGTH:]
-        self.payload.append(TCPMessage.padMessage(pack))
+            pack, remaining = remaining[:FixedMessage.MESSAGE_LENGTH], remaining[FixedMessage.MESSAGE_LENGTH:]
+        self.payload.append(FixedMessage.padMessage(pack))
 
     def sendTo(self, s):
         """Send payload to specified socket."""
         for packet in self.payload:
             length = len(packet)
-            assert length == TCPMessage.MESSAGE_LENGTH
+            assert length == FixedMessage.MESSAGE_LENGTH
             try:
                 s.send(packet.encode())
             except OSError:
@@ -362,7 +369,7 @@ class TCPMessage:
     def padMessage(message, padding=None):
         """Pad string message with whitespace up to length specified by padding"""
         if padding is None:
-            padding = TCPMessage.MESSAGE_LENGTH
+            padding = FixedMessage.MESSAGE_LENGTH
         length = padding - len(message)
         return message + ' '*length
 
@@ -371,13 +378,13 @@ class TCPMessage:
         """Receive one complete TCP Message and output its string content."""
         output = ''
         try:
-            packet = s.recv(TCPMessage.MESSAGE_LENGTH).decode()
+            packet = s.recv(FixedMessage.MESSAGE_LENGTH).decode()
             if not packet:
                 raise BrokenPipeError
             s.settimeout(5.0)
-            while packet[TCPMessage.MESSAGE_LENGTH - 1] == TCPMessage.DELIMITER:
-                output += packet[:TCPMessage.MESSAGE_LENGTH - 1]
-                packet = s.recv(TCPMessage.MESSAGE_LENGTH).decode()
+            while packet[FixedMessage.MESSAGE_LENGTH - 1] == FixedMessage.DELIMITER:
+                output += packet[:FixedMessage.MESSAGE_LENGTH - 1]
+                packet = s.recv(FixedMessage.MESSAGE_LENGTH).decode()
                 if not packet:
                     raise BrokenPipeError
             output += packet.rstrip()
