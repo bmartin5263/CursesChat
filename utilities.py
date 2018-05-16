@@ -37,15 +37,20 @@ class Debug:
 class Notification(Enum):
     SERVER_DISCONNECTED = 0
     CLIENT_DISCONNECTED = 1
+    SOCKET_MOVED = 2
 
 class Message(Enum):
     # SERVER
     GET_ROOMS = "dict(type='room', action='get')"
     SEND_ROOMS = "dict(type='room', action='get', data={data})"
-    NEW_ROOM = "dict(type='room', action='new', data='{data}')"
-    CHAT = "dict(type='chat', data='{data}')"
+    NEW_ROOM = "dict(type='room', action='new', canCreate={canCreate}, data='{data}')"
+    GLOBAL_CHAT = "dict(type='chat', data='{data}')"
     # CHAT ROOM
-    JOIN_ROOM = "dict(type='room', action=join, data={data})"
+    CHAT = "dict(type='room', action='chat', message='{message}')"
+    ROUTE_TO = "dict(type='room', action='route', canRoute={canRoute}, data='{data}')"
+    JOIN_ROOM = "dict(type='room', action='join', canJoin={canJoin}, data='{data}')"
+    ROOM_WELCOME = "dict(type='room' action='welcome', success={success}, isHost={isHost})"
+    ROOM_TERMINATE = "dict(type='room', action='terminate')"
 
     @staticmethod
     def compile(message, **kwargs):
@@ -85,7 +90,7 @@ class SocketManager:
         self.listeningSocket = None     # Socket to listen for connections
         self.listening = False          # Is the server listening?
 
-        self.inbox = {'default' : []}                 # List of incoming messages/notifications in format (isMessage, socket, message)
+        self.inbox = {'default' : []}   # List of incoming messages/notifications in format (isMessage, socket, message)
         self.outbox = {}                # socket : list of messages (str)
 
         self.lock = threading.RLock()   # Threading lock
@@ -123,7 +128,7 @@ class SocketManager:
         self.console("Added Socket, total = {}".format(len(self.socketMap)))
 
     def connect(self, address, group='default'):
-        """Open connection to the address specified in the constructor. Client only."""
+        """Open connection to the address. Client only."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((address, self.port))
         self.addSocket(sock, group)
@@ -131,7 +136,7 @@ class SocketManager:
 
     def console(self, message, messageType=''):
         if self.debug:
-            self.debug.console(message, messageType)
+            self.debug.console('[Manager] '+message, messageType)
 
     def getOutbox(self, sock):
         """Get messages from outbox to send."""
@@ -194,6 +199,7 @@ class SocketManager:
             else:
                 if group not in self.sockets:
                     self.sockets[group] = []
+                    self.inbox[group] = []
         elif action == 'remove':
             self.console("Removed called by {}".format(callerID.title()), 'connection')
             try:
@@ -224,12 +230,15 @@ class SocketManager:
         elif action == 'group':     # Place Socket into Group
             currentGroup = self.socketMap[sock]
             self.sockets[currentGroup].remove(sock)
-            if len(self.sockets[currentGroup]) == 0:
-                del self.sockets[currentGroup]
-            if group not in self.sockets:
-                self.sockets[group] = []
+            #if group not in self.sockets:
+            #    self.sockets[group] = []
             self.sockets[group].append(sock)
             self.socketMap[sock] = group
+
+    def moveSocket(self, sock, group):
+        """Move socket into group"""
+        self.modifySockets(action='group', group=group, sock=sock)
+        self.addNotification(Notification.SOCKET_MOVED, sock)
 
     def read(self, group='default'):
         """Get all messages in a group's inbox."""
@@ -295,6 +304,11 @@ class SocketManager:
             self.listening = False
         else:
             raise AssertionError("Only Server Managers can Listen")
+
+    def terminateGroup(self, group):
+        sockList = list(self.sockets[group])
+        for sock in sockList:
+            self.removeSocket(sock, 'terminate')
 
     def terminateManager(self):
         """Stop listening and shutdown all sockets."""

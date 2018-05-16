@@ -19,27 +19,63 @@ def main():
     s = Server(debugger)
     s.run()
 
-class ChatClient:
-
-    def __init__(self):
-        self.id = None
-        self.name = 'Anonymous'
-        self.messageSocket = None
-        self.fileSocket = None
-        self.auxSocket = None
-
 class ChatRoom:
 
-    def __init__(self, name, ):
+    def __init__(self, name, messageManager, debugger=None):
         self.name = name
-        self.messageSockets = {}            # name : socket
-        self.fileSockets = {}               # name : socket
+        self.messageManager = messageManager
+        self.active = False
+        self.debug = debugger
+        #self.fileManager = fileManager
+
+        self.reader = None
+        self.writer = None
+
+        # {'name': string, 'messageSock' : socket, 'fileSock' : socket}
+        # index 0 = host
+        self.hostSock = None
+        self.numUsers = 0
+        #self.nextID = 0
+        #self.users = [None, None, None, None, None, None, None, None, None, None]
+
+    def console(self, message, messageType=''):
+        if self.debug:
+            self.debug.console('[Server] ' + message, messageType)
 
     def closeRoom(self):
-        pass
+        self.active = False
+        self.messageManager.terminateGroup(self.name)
 
     def openRoom(self):
-        pass
+        self.messageManager.addGroup(self.name)
+        self.active = True
+        self.reader = threading.Thread(target=self.messageReader)
+        #self.writer = threading.Thread(target=None)
+        self.reader.start()
+
+    def messageReader(self):
+        while self.active:
+            inbox = self.messageManager.read(self.name)
+            for isMessage, sock, message in inbox:
+                if isMessage:
+                    message = eval(message)
+                    if message['type'] == 'chat':
+                        print(message['data'])
+                else:
+                    resource = sock
+                    if message == Notification.SOCKET_MOVED:
+                        self.console("Socket Moved In".format(message), 'message')
+                        if self.hostSock is None:
+                            self.hostSock = resource
+                            response = Message.compile(Message.ROOM_WELCOME, isHost=True)
+                        else:
+                            response = Message.compile(Message.ROOM_WELCOME, isHost=False)
+                        self.messageManager.write(response, [resource])
+                    if message == Notification.CLIENT_DISCONNECTED:
+                        self.console("DISCONNECT", "important")
+
+            time.sleep(.1)
+        #self.console("Server Reader Ending.", "important")
 
 class Server:
 
@@ -57,7 +93,30 @@ class Server:
         self.lock = threading.RLock()
 
     def console(self, message, messageType=''):
-        self.debug.console(message, messageType)
+        self.debug.console('[Server] '+message, messageType)
+
+    def createRoom(self, roomName):
+        if roomName not in self.rooms:
+            self.rooms[roomName] = ChatRoom(roomName, self.messageSocketManager)
+            self.rooms[roomName].openRoom()
+            self.console("Client made room {}".format(roomName), 'room')
+            return True
+        else:
+            return False
+
+    def messageSocketRouter(self):
+        while self.active:
+            inbox = self.messageSocketManager.read()
+            for isMessage, sock, message in inbox:
+                if isMessage:
+                    message = eval(message)
+                    if message['type'] == 'room':
+                        if message['action'] == 'route':
+                            if self.rooms[message['data']].numUsers < 10:
+                                self.console("Routing Socket to {}".format(message['data']))
+                                self.messageSocketManager.moveSocket(sock, message['data'])
+                            else:
+                                self.console("CANNOT ROUTE SOCK TO {}".format(message['data']), "important")
 
     def serverReader(self, manager):
         while self.active:
@@ -67,17 +126,31 @@ class Server:
                     message = eval(message)
                     if message['type'] == 'room':
                         if message['action'] == 'get':
-                            self.console("Client wants rooms", 'room')
-                            response = Message.SEND_ROOMS.value.format(list(self.rooms.keys()))
+                            self.console("Client is requesting rooms", 'room')
+                            response = Message.compile(Message.SEND_ROOMS, data=list(self.rooms.keys()))
                             self.serverSocketManager.write(response, [sock])
+
                         elif message['action'] == 'new':
                             roomName = message['data']
-                            if roomName not in self.rooms:
-                                self.rooms[roomName] = None
-                                self.console("Client made room {}".format(roomName), 'room')
+                            success = self.createRoom(roomName)
+                            if success:
+                                response = Message.compile(Message.NEW_ROOM, canCreate=True, data=message['data'])
+                            else:
+                                response = Message.compile(Message.NEW_ROOM, canCreate=False, data=message['data'])
+                            self.serverSocketManager.write(response, [sock])
+
+                        elif message['action'] == 'join':
+                            self.console("Client wants to join room {}".format(message['data']), 'room')
+                            roomName = message['data']
+                            if roomName in self.rooms:
+                                response = Message.compile(Message.JOIN_ROOM, data=roomName, canJoin=True)
+                            else:
+                                response = Message.compile(Message.JOIN_ROOM, data=roomName, canJoin=False)
+                            self.serverSocketManager.write(response, [sock])
+
                     elif message['type'] == 'chat':
                         self.console("Received Chat Message", "message")
-                        response = Message.CHAT.value.format(message['data'])
+                        response = Message.compile(Message.GLOBAL_CHAT, data=message['data'])
                         self.serverSocketManager.writeAll(response, exclude=[sock])
                 else:
                     resource = sock
@@ -89,7 +162,9 @@ class Server:
         self.console("Server Started.", "important")
         self.startSocketManagers()
         inboxReader = threading.Thread(target=self.serverReader, args=(self.serverSocketManager,))
+        messageRouter = threading.Thread(target=self.messageSocketRouter)
         inboxReader.start()
+        messageRouter.start()
         while True:
             try:
                 time.sleep(.1)
